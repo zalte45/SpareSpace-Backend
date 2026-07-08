@@ -1,0 +1,15 @@
+# Environment variables (Crucial!)
+.env
+.env.local
+
+# Dependency folders (Never upload these, they are too large)
+node_modules/
+venv/
+.venv/
+__pycache__/
+
+# Logs and system files
+npm-debug.log*
+.DS_Store
+dist/
+build/
