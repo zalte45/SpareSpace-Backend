@@ -1,23 +1,18 @@
-import {Router} from "express";
+import { Router } from "express";
 import * as authController from '../controllers/auth.controller.js';
 
 
-const authRouter=Router();
+const authRouter = Router();
 
-
-authRouter.post("/register",authController.register);
-authRouter.get("/getMe",authController.getMe);
-authRouter.post("/login",authController.login)
-authRouter.get("/logout",authController.Logout)
-authRouter.post("/verifyOtp",authController.verifyOtp)
-authRouter.post("/forgotOtp",authController.forgotOtp)
-authRouter.post("/forgotOtpVerify",authController.forgotOtpVerify)
-authRouter.post("/newPassword",authController.newPassword)
-
-
-
-
-
+// Authentication routes
+authRouter.post("/register", authController.register);
+authRouter.get("/getMe", authController.getMe);
+authRouter.post("/login", authController.login)
+authRouter.get("/logout", authController.Logout)
+authRouter.post("/verifyOtp", authController.verifyOtp)
+authRouter.post("/forgotOtp", authController.forgotOtp)
+authRouter.post("/forgotOtpVerify", authController.forgotOtpVerify)
+authRouter.post("/newPassword", authController.newPassword)
 
 
 

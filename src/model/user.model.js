@@ -15,6 +15,10 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: [true, "Password is required !! "]
     },
+    role: {
+        type: String,
+        required: [true, "Role is required !! "]
+    },
     verified: {
         type: Boolean,
         default: false

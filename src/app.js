@@ -1,6 +1,7 @@
 import express from 'express';
 import morgan from 'morgan';
 import authRouter from './routes/auth.routes.js'
+import listingRouter from './routes/listing.routes.js';
 import cors from 'cors'
 import cookieParser from 'cookie-parser';
 
@@ -17,7 +18,12 @@ app.use(
 );
 app.use(express.json());
 app.use(morgan("dev"));
-app.use("/api", authRouter)
+app.use("/api",authRouter)
+app.use("/api",listingRouter)
+
+
+
+
 
 
 export default app

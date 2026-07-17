@@ -13,7 +13,7 @@ export async function register(req, res) {
     try {
         // registration logic
         console.log("Api is working !!")
-        const { username, email, password } = req.body;
+        const { username, email, password, role } = req.body;
         console.time("find user")
         const IsAlreadyRegister = await userModel.findOne({
             $or: [
@@ -35,7 +35,8 @@ export async function register(req, res) {
         const user = await userModel.create({
             username,
             email,
-            password: hashedPassword
+            password: hashedPassword,
+            role
         })
 
 
@@ -53,7 +54,7 @@ export async function register(req, res) {
             user: user._id,
             otpHashed
         })
-        await sendEmail(email,"OTP verification",`Your otp code is ${otp}`,otpHtml)
+        await sendEmail(email, "OTP verification", `Your otp code is ${otp}`, otpHtml)
         res.status(201).json({
             Message: "User register successfully !!",
             user: {
@@ -74,17 +75,24 @@ export async function register(req, res) {
 }
 
 export async function getMe(req, res) {
-    const token = req.cookies.refreshToken
-    if (!token) {
-        return res.status(401).json({
-            Message: "Token not found"
+    try {
+        const token = req.cookies.accessToken
+        if (!token) {
+            return res.status(401).json({
+                Message: "Token not found"
+            })
+        }
+        const decoded = jwt.verify(token, config.JWT_SECRET)
+        const user = await userModel.findById(decoded.id).select("-password");
+        res.status(200).json({
+            Message: "User found successfully !",
+            user
+        })
+    } catch (error) {
+        res.status(401).json({
+            Message: "Invalid or expired token !"
         })
     }
-    const decoded = jwt.verify(token, config.JWT_SECRET)
-    const user = await userModel.findById(decoded.id)
-    res.status(200).json({
-        Message: "User found successfully !",
-    }, token)
 }
 
 export async function login(req, res) {
@@ -131,14 +139,21 @@ export async function login(req, res) {
             sameSite: "strict",
             maxAge: 7 * 24 * 60 * 60 * 1000 //7days
         })
+        res.cookie("accessToken", accessToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict",
+            maxAge: 15 * 60 * 1000, // 15 minutes
+        });
 
         res.status(200).json({
             Message: "Logged in successfully",
             user: {
                 username: user.username,
-                email: user.email
+                email: user.email,
+                id: user._id,
+                verified:user.verified
             },
-            accessToken,
         })
 
     } catch (error) {
@@ -293,7 +308,7 @@ export async function forgotOtp(req, res) {
     const otpHashed = crypto.createHash("sha256").update(otp).digest("hex")
     const getOtpHtml = getOtpHtmlForget(otp)
     // await sendEmail(email, "Rest Otp", getOtpHtml)
-    await sendEmail(email,"Rest Otp",`Your otp code is ${otp}`,getOtpHtml)
+    await sendEmail(email, "Rest Otp", `Your otp code is ${otp}`, getOtpHtml)
 
 
     await otpModel.create({
@@ -366,4 +381,5 @@ export async function newPassword(req, res) {
         Message: "Password rest successFull !"
     })
 }
+
 
