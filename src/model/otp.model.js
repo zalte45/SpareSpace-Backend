@@ -6,6 +6,7 @@ const otpSchema = new mongoose.Schema({
         required: [true, "Email is required !"]
 
     },
+    
     user: {
         type: String,
         required: [true, "User is required !"]
@@ -13,7 +14,10 @@ const otpSchema = new mongoose.Schema({
     otpHashed:{
         type:String,
         required:[true,"otp is required !"]
-    }
+    },
+    otpExpiresAt:{
+        type:Date
+    },
 },{
     timestamps:true
 })

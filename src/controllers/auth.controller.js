@@ -12,7 +12,7 @@ import { generateOtp, getOtpHtml, getOtpHtmlForget } from "../utils/utils.js";
 export async function register(req, res) {
     try {
         // registration logic
-        console.log("Api is working !!")
+
         const { username, email, password, role } = req.body;
         console.time("find user")
         const IsAlreadyRegister = await userModel.findOne({
@@ -21,7 +21,7 @@ export async function register(req, res) {
                 { email }
             ]
         })
-        console.timeEnd("find user")
+
 
         if (IsAlreadyRegister) {
             return res.status(409).json({
@@ -30,7 +30,7 @@ export async function register(req, res) {
         }
 
         const hashedPassword = crypto.createHash("sha256").update(password).digest("hex")
-        console.log(hashedPassword)
+
 
         const user = await userModel.create({
             username,
@@ -46,13 +46,16 @@ export async function register(req, res) {
             "expiresIn": "10m"
         })
         const otp = generateOtp()
-        console.log(otp)
+        console.log("GENERATED OTP IS:", otp)
+
         const otpHtml = getOtpHtml(otp)
         const otpHashed = crypto.createHash("sha256").update(otp).digest("hex");
+        const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
         await otpModel.create({
             email,
             user: user._id,
-            otpHashed
+            otpHashed,
+            otpExpiresAt
         })
         await sendEmail(email, "OTP verification", `Your otp code is ${otp}`, otpHtml)
         res.status(201).json({
@@ -76,29 +79,54 @@ export async function register(req, res) {
 
 export async function getMe(req, res) {
     try {
-        const token = req.cookies.accessToken
-        if (!token) {
+        const accessToken = req.cookies.accessToken
+        const refreshToken=req.cookies.refreshToken
+        if (!accessToken || !refreshToken) {
             return res.status(401).json({
-                Message: "Token not found"
+                Message: "Tokens not found"
             })
         }
-        const decoded = jwt.verify(token, config.JWT_SECRET)
+        const decoded = jwt.verify(accessToken, config.JWT_SECRET)
         const user = await userModel.findById(decoded.id).select("-password");
-        res.status(200).json({
-            Message: "User found successfully !",
-            user
+        const refreshTokenHashed=crypto.createHash("sha256").update(refreshToken).digest("hex")
+        console.log(refreshToken)
+        console.log(refreshTokenHashed)
+        const session = await sessionModel.findOne({
+            refreshTokenHashed:refreshTokenHashed
         })
+        console.log(session)
+        if (session.revoked===false) {
+            return res.status(200).json({
+                Message: "User found successfully ! and logged in",
+                user,
+                session
+            })
+        }
+        if (session.revoked===true) {
+            return res.status(200).json({
+                Message: "User found successfully ! but logout",
+                user,
+                session
+            })
+        }
+        res.status(200).json({
+                Message: "User found successfully ! but logout",
+                user,
+                session
+            })
     } catch (error) {
+        console.error(error)
         res.status(401).json({
-            Message: "Invalid or expired token !"
+            Message: "Invalid or expired token !",
+            error:error
         })
     }
 }
 
 export async function login(req, res) {
+    console.log("Login api run !")
     const { email, password } = req.body;
     try {
-
         const user = await userModel.findOne({ email })
         if (!user) {
             return res.status(400).json({
@@ -152,7 +180,8 @@ export async function login(req, res) {
                 username: user.username,
                 email: user.email,
                 id: user._id,
-                verified:user.verified
+                verified: user.verified,
+                Role:user.role
             },
         })
 
@@ -164,14 +193,13 @@ export async function login(req, res) {
     }
 }
 
-export async function refreshToken(req, res) {
-    const refreshToken = req.cookies.refreshToken;
+export async function tokenRotate(req, res) {
+    const { refreshToken } = req.cookies;
     if (!refreshToken) {
         return res.status(401).json({
             Message: "Refresh Token not found !"
         })
     }
-
     const refreshTokenHashed = crypto.createHash("sha256").update(refreshToken).digest("hex");
     const session = await sessionModel.findOne({
         refreshTokenHashed,
@@ -198,6 +226,12 @@ export async function refreshToken(req, res) {
     session.refreshTokenHashed = newRefreshTokenHashed;
     await session.save()
 
+    res.cookie("refreshToken", newRefreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000 //7days
+    })
     res.status(200).json({
         Message: "Access token refresh successFully !",
         accessToken
@@ -205,56 +239,75 @@ export async function refreshToken(req, res) {
 }
 
 export async function Logout(req, res) {
-    const refreshToken = req.cookies.refreshToken;
-    if (!refreshToken) {
-        return res.status(400).json({
-            Message: "Token not found !"
+    try {
+        const refreshToken = req.cookies.refreshToken;
+        if (!refreshToken) {
+            return res.status(400).json({
+                Message: "Token not found !"
+            })
+        }
+        const refreshTokenHashed = crypto.createHash("sha256").update(refreshToken).digest("hex");
+        const session = await sessionModel.findOne({
+            refreshTokenHashed,
+            revoked: false
         })
-    }
-    const refreshTokenHashed = crypto.create("sha256").update(refreshToken).digest("hex");
-    const session = await sessionModel.findOne({
-        refreshTokenHashed,
-        revoked: false
-    })
 
-    if (!session) {
+        if (!session) {
+            return res.status(200).json({
+                Message: "Invalid refresh token !!"
+            })
+        }
+        session.revoked = true;
+        await session.save()
+
+        res.clearCookie("refreshToken");
+
         return res.status(200).json({
-            Message: "Invalid refresh token !!"
+            Message: "Logout SuccessFull"
         })
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            Message: "Internal server error"
+        });
     }
-    session.revoked = true;
-    await session.save()
-
-    res.clearCookie("refreshToken");
-
-    res.status(200).json({
-        Message: "Logout SuccessFull"
-    })
-
 }
 
 export async function verifyOtp(req, res) {
     try {
         const { otp, verifyToken } = req.body;
+        console.log(verifyToken)
+
         if (!otp || !verifyToken) {
             return res.status(401).json({
                 Message: "Invalid otp or verifyToken"
             })
         }
-        console.log(verifyToken)
+
+
         const decoded = jwt.verify(verifyToken, config.JWT_SECRET)
-        console.log(otp)
+
         const otpHashed = crypto.createHash("sha256").update(otp).digest("hex");
-        console.log(otpHashed)
         const otpDoc = await otpModel.findOne({
             email: decoded.email,
             otpHashed
-        })
-        console.log(otpDoc)
+        });
+
         if (!otpDoc) {
             return res.status(401).json({
-                message: "user not found"
-            })
+                message: "Invalid OTP"
+            });
+        }
+
+        // Check whether OTP has expired
+        if (new Date() > otpDoc.otpExpiresAt) {
+            await otpModel.deleteMany({
+                user: otpDoc.user
+            });
+
+            return res.status(401).json({
+                message: "OTP has expired"
+            });
         }
 
         const user = await userModel.findByIdAndUpdate(
@@ -265,12 +318,12 @@ export async function verifyOtp(req, res) {
             {
                 new: true
             }
-        )
+        );
 
         await otpModel.deleteMany({
             user: otpDoc.user
-        })
-        console.log("")
+        });
+
 
         return res.status(200).json({
             message: "Email verified successfully !",
@@ -302,7 +355,7 @@ export async function forgotOtp(req, res) {
             Message: "User not found"
         })
     }
-    console.log(user._id)
+
 
     const otp = generateOtp()
     const otpHashed = crypto.createHash("sha256").update(otp).digest("hex")
@@ -352,14 +405,13 @@ export async function forgotOtpVerify(req, res) {
 }
 export async function newPassword(req, res) {
     const { password, resetToken } = req.body;
-    console.log(password)
-    console.log(resetToken)
+
     if (!password || !resetToken) {
         return res.status(400).json({
             Message: "Invalid credential"
         })
     }
-    console.log(password)
+
     const passwordHash = crypto.createHash("sha256").update(password).digest("hex")
     const decoded = jwt.verify(resetToken, config.JWT_SECRET);
     const user = await userModel.findById(decoded.user)

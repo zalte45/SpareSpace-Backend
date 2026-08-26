@@ -4,10 +4,11 @@ import { upload } from '../middleware/upload.js';
 
 const listingRouter = Router()
 
-console.log("Listing router loaded");
-// listingRouter.post("/listing",spaceListing.Listing);
-
 listingRouter.post("/listing", upload.array("images", 10),spaceListing.Listing);
+listingRouter.post("/my-spaces",spaceListing.getMySpaces);
+listingRouter.get("/listing",spaceListing.getAllSpaces);
+listingRouter.get("/listing/:id",spaceListing.getSpaceById);
+
 
 export default listingRouter
 

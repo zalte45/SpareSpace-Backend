@@ -76,6 +76,7 @@ export function getOtpHtml(otp) {
     <div class="container">
         <h2>Your OTP Code</h2>
         <p class="otp">${otp}</p>
+        <p>OTP will be expires in 10 min ! <p>
         <p>Please use this code to verify your email address.</p>
     </div>
 </body>
