@@ -15,9 +15,17 @@ export async function Listing(req, res) {
                 message: "Invalid or token expires !"
             })
         }
-        const bookingPrefs = JSON.parse(req.body.bookingPrefs);
-        const amenities = JSON.parse(req.body.amenities);
-        let decoded = jwt.verify(accessToken, config.JWT_SECRET)
+        let bookingPrefs = {};
+        let amenities = [];
+        try {
+            if (req.body.bookingPrefs) bookingPrefs = JSON.parse(req.body.bookingPrefs);
+            if (req.body.amenities) amenities = JSON.parse(req.body.amenities);
+        } catch (err) {
+            return res.status(400).json({
+                success: false,
+                message: "bookingPrefs and amenities must be valid JSON",
+            });
+        }        let decoded = jwt.verify(accessToken, config.JWT_SECRET)
         let user = await userModel.findById(decoded.id)
         if (user) {
             const uploadedImages = [];
@@ -330,5 +338,13 @@ export async function getSpaceById(req, res) {
             success: false,
             message: error.message,
         });
+    }
+}
+export async function getFilteredSpaces(req,res) {
+    const query=req.query;
+    if (query) {
+        console.log(query);
+    } else {
+        console.log("doesn't have");
     }
 }

@@ -2,6 +2,7 @@ import express from 'express';
 import morgan from 'morgan';
 import authRouter from './routes/auth.routes.js'
 import listingRouter from './routes/listing.routes.js';
+import bookingRouter from './routes/booking.routes.js';
 import cors from 'cors'
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
@@ -30,8 +31,8 @@ app.use(express.json());
 app.use(morgan("dev"));
 app.use("/api", limiter);
 app.use("/api", authRouter);
-app.use("/api", listingRouter)
-
+app.use("/api", listingRouter);
+app.use("/api", bookingRouter);
 
 
 export default app

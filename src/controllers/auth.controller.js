@@ -89,12 +89,10 @@ export async function getMe(req, res) {
         const decoded = jwt.verify(accessToken, config.JWT_SECRET)
         const user = await userModel.findById(decoded.id).select("-password");
         const refreshTokenHashed=crypto.createHash("sha256").update(refreshToken).digest("hex")
-        console.log(refreshToken)
-        console.log(refreshTokenHashed)
+        
         const session = await sessionModel.findOne({
             refreshTokenHashed:refreshTokenHashed
         })
-        console.log(session)
         if (session.revoked===false) {
             return res.status(200).json({
                 Message: "User found successfully ! and logged in",
