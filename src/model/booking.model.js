@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-
 const bookingSchema = new mongoose.Schema(
   {
     renter: {
@@ -43,8 +42,14 @@ const bookingSchema = new mongoose.Schema(
     },
     bookingStatus: {
       type: String,
-      enum: ["pending", "confirmed", "active", "completed", "cancelled", "expired"],
-      default: "pending",
+      enum: [
+        "confirmed",
+        "active",
+        "completed",
+        "cancelled",
+        "expired"
+      ],
+      default: "confirmed",
     },
     paymentStatus: {
       type: String,

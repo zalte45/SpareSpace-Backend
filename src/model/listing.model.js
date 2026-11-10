@@ -2,6 +2,15 @@ import mongoose from "mongoose";
 
 const listSchema = new mongoose.Schema(
   {
+    status: {
+      type: String,
+      enum: ["active", "archived"],
+      default: "active"
+    },
+    isOccupied: {
+      type: Boolean,
+      default: false
+    },
     // Images
     images: [
       {
@@ -199,6 +208,6 @@ const listSchema = new mongoose.Schema(
   }
 );
 
-const listingModel=mongoose.model("Listing", listSchema);
+const listingModel = mongoose.model("Listing", listSchema);
 
 export default listingModel

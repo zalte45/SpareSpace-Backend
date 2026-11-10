@@ -1,5 +1,8 @@
 import bookingModel from "../model/booking.model.js";
 import listingModel from "../model/listing.model.js";
+import jwt from 'jsonwebtoken';
+import config from "../config/config.js";
+import userModel from "../model/user.model.js";
 
 // Helper: Calculate month difference or duration
 const parseDuration = (startDateStr, endDateStr, reqDuration) => {
@@ -69,19 +72,28 @@ export async function previewBooking(req, res) {
     const { listingId, startDate, endDate, durationMonths } = req.body;
 
     if (!listingId || !startDate || !endDate) {
-      return res.status(400).json({ success: false, message: "Listing ID, start date, and end date are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Listing ID, start date, and end date are required"
+      });
     }
 
     const listing = await listingModel.findById(listingId);
     if (!listing) {
-      return res.status(404).json({ success: false, message: "Listing not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found"
+      });
     }
 
     const { start, end, durationMonths: calculatedDuration } = parseDuration(startDate, endDate, durationMonths);
     const check = await validateAvailability(listing, start, end, calculatedDuration);
 
     if (!check.available) {
-      return res.status(400).json({ success: false, message: check.message });
+      return res.status(400).json({
+        success: false,
+        message: check.message
+      });
     }
 
     const monthlyPrice = listing.price || 0;
@@ -105,29 +117,44 @@ export async function previewBooking(req, res) {
       },
     });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(400).json({
+      success: false,
+      message: error.message
+    });
   }
 }
 
 export async function createBooking(req, res) {
   try {
-    const { listingId, startDate, endDate, durationMonths } = req.body;
-    const userId = req.user.id;
-
-    if (!listingId || !startDate || !endDate) {
-      return res.status(400).json({ success: false, message: "Listing ID, start date, and end date are required" });
-    }
-
+    const {
+      listingId,
+      startDate,
+      endDate,
+      durationMonths
+    } = req.body;
     const listing = await listingModel.findById(listingId);
     if (!listing) {
-      return res.status(404).json({ success: false, message: "Listing not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found"
+       });
     }
-
+    if (!listingId || !startDate || !endDate) {
+      return res.status(400).json(
+        {
+          success: false,
+          message: "Listing ID, start date, and end date are required"
+        }
+      );
+    }
     const { start, end, durationMonths: calculatedDuration } = parseDuration(startDate, endDate, durationMonths);
     const check = await validateAvailability(listing, start, end, calculatedDuration);
 
     if (!check.available) {
-      return res.status(400).json({ success: false, message: check.message });
+      return res.status(400).json({
+        success: false,
+        message: check.message
+      });
     }
 
     const monthlyPrice = listing.price || 0;
@@ -135,7 +162,14 @@ export async function createBooking(req, res) {
     const rentTotal = monthlyPrice * calculatedDuration;
     const platformFee = Math.round(rentTotal * 0.05);
     const totalAmount = rentTotal + securityDeposit + platformFee;
+    const accessToken = req.cookies.accessToken;
 
+    const { id: userId } = jwt.verify(
+      accessToken,
+      config.JWT_SECRET
+    );
+
+    const user = await userModel.findById(userId);
     const booking = await bookingModel.create({
       renter: userId,
       listing: listing._id,
@@ -156,7 +190,10 @@ export async function createBooking(req, res) {
       booking
     });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(400).json({
+      success: false,
+      message: error.message
+    });
   }
 }
 
@@ -192,7 +229,10 @@ export async function getMyBookings(req, res) {
       bookings,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 }
 
@@ -207,14 +247,20 @@ export async function getBookingById(req, res) {
       .populate("host", "username email");
 
     if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found"
+      });
     }
 
     const renterId = booking.renter._id ? booking.renter._id.toString() : booking.renter.toString();
     const hostId = booking.host._id ? booking.host._id.toString() : booking.host.toString();
 
     if (renterId !== userId && hostId !== userId) {
-      return res.status(403).json({ success: false, message: "Unauthorized to view this booking" });
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized to view this booking"
+      });
     }
 
     return res.status(200).json({

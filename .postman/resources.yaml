@@ -1,0 +1,10 @@
+workspace:
+  id: ""
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../postman/collections/spare space: 47932178-9093cda5-220f-4c23-ba46-c9082befa5f3
+  globals:
+    ../postman/globals/workspace.globals.yaml: ef3ae4de-3fcf-4cd6-8d2a-d60badf6e66a

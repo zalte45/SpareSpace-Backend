@@ -1,0 +1,8 @@
+$kind: http-request
+url: http://localhost:3000/api/getMe
+method: GET
+body:
+  type: json
+  content: ""
+settings: {}
+order: 4000
