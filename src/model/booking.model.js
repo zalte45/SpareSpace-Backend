@@ -40,6 +40,10 @@ const bookingSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    durationMonths: {
+      type: Number,
+      required: true,
+    },
     bookingStatus: {
       type: String,
       enum: [

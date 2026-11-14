@@ -24,6 +24,12 @@ if (!process.env.CLOUDINARY_API_KEY) {
 if (!process.env.CLOUDINARY_API_SECRET) {
     throw new Error("CLOUDINARY_API_SECRET is not define in environment variables !")
 }
+if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is not define in environment variables !")
+}
+if (!process.env.DIRECT_URL) {
+    throw new Error("DIRECT_URL is not define in environment variables !")
+}
 
 const config = {
     CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
@@ -32,7 +38,9 @@ const config = {
     MONGO_URI: process.env.MONGO_URI,
     JWT_SECRET: process.env.JWT_SECRET,
     EMAIL_USER: process.env.EMAIL_USER,
-    EMAIL_PASS: process.env.EMAIL_PASS
+    EMAIL_PASS: process.env.EMAIL_PASS,
+    DATABASE_URL: process.env.DATABASE_URL,
+    DIRECT_URL: process.env.DIRECT_URL
 }
 
 export default config;

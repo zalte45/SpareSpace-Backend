@@ -1,107 +1,227 @@
 import bookingModel from "../model/booking.model.js";
 import listingModel from "../model/listing.model.js";
-import jwt from 'jsonwebtoken';
-import config from "../config/config.js";
-import userModel from "../model/user.model.js";
+import mongoose from "mongoose";
 
-// Helper: Calculate month difference or duration
 const parseDuration = (startDateStr, endDateStr, reqDuration) => {
   const start = new Date(startDateStr);
   const end = new Date(endDateStr);
 
+  // Validate dates
   if (isNaN(start.getTime()) || isNaN(end.getTime())) {
     throw new Error("Invalid start or end date");
   }
+
+  // End date must be after start date
   if (start >= end) {
     throw new Error("End date must be after start date");
   }
 
-  let durationMonths = Number(reqDuration);
-  if (!durationMonths || durationMonths < 1) {
-    const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
-    durationMonths = Math.max(1, Math.round(diffDays / 30));
+  // Calculate calendar month difference
+  let durationMonths =
+    (end.getFullYear() - start.getFullYear()) * 12 +
+    (end.getMonth() - start.getMonth());
+
+  // Validate complete months
+  if (end.getDate() !== start.getDate()) {
+    throw new Error("Rental duration must be in complete months");
   }
 
-  return { start, end, durationMonths };
+  // Validate minimum duration
+  if (durationMonths < 1) {
+    throw new Error("Rental duration must be at least one month");
+  }
+
+  // Validate requested duration if provided
+  if (
+    reqDuration !== undefined &&
+    reqDuration !== null &&
+    Number(reqDuration) !== durationMonths
+  ) {
+    throw new Error("Duration months does not match the dates");
+  }
+
+  return {
+    start,
+    end,
+    durationMonths,
+  };
 };
-
-// Helper: Check listing date bounds & overlapping bookings
 const validateAvailability = async (listing, start, end, durationMonths) => {
-  // Check listing availableFrom & availableUntil if not availableImmediately
+  // 1. Check listing status
+  if (listing.status !== "active") {
+    return {
+      available: false,
+      message: "This listing is not currently active",
+    };
+  }
+
+  // 2. Check if listing is already occupied
+  if (listing.isOccupied) {
+    return {
+      available: false,
+      message: "This space is currently occupied",
+    };
+  }
+
+  // 3. Check availableFrom and availableUntil
   if (!listing.availableImmediately) {
-    if (listing.availableFrom && start < new Date(listing.availableFrom)) {
-      return { available: false, message: `Space is only available starting from ${new Date(listing.availableFrom).toISOString().split('T')[0]}` };
+    if (listing.availableFrom) {
+      const availableFrom = new Date(listing.availableFrom);
+
+      if (start < availableFrom) {
+        return {
+          available: false,
+          message: `Space is only available starting from ${availableFrom.toISOString().split("T")[0]}`,
+        };
+      }
     }
-    if (listing.availableUntil && end > new Date(listing.availableUntil)) {
-      return { available: false, message: `Space is only available until ${new Date(listing.availableUntil).toISOString().split('T')[0]}` };
+
+    if (listing.availableUntil) {
+      const availableUntil = new Date(listing.availableUntil);
+
+      if (end > availableUntil) {
+        return {
+          available: false,
+          message: `Space is only available until ${availableUntil.toISOString().split("T")[0]}`,
+        };
+      }
     }
   }
 
-  // Check minDuration / maxDuration if specified (e.g. "1 Month" -> 1)
+  // 4. Validate minimum duration
   if (listing.minDuration) {
-    const minVal = parseInt(listing.minDuration);
-    if (!isNaN(minVal) && durationMonths < minVal) {
-      return { available: false, message: `Minimum booking duration for this space is ${minVal} month(s)` };
-    }
-  }
-  if (listing.maxDuration) {
-    const maxVal = parseInt(listing.maxDuration);
-    if (!isNaN(maxVal) && durationMonths > maxVal) {
-      return { available: false, message: `Maximum booking duration for this space is ${maxVal} month(s)` };
+    const minVal = parseInt(listing.minDuration, 10);
+
+    if (!Number.isNaN(minVal) && durationMonths < minVal) {
+      return {
+        available: false,
+        message: `Minimum booking duration for this space is ${minVal} month(s)`,
+      };
     }
   }
 
-  // Check overlapping active / pending / confirmed bookings
+  // 5. Validate maximum duration
+  if (listing.maxDuration) {
+    const maxVal = parseInt(listing.maxDuration, 10);
+
+    if (!Number.isNaN(maxVal) && durationMonths > maxVal) {
+      return {
+        available: false,
+        message: `Maximum booking duration for this space is ${maxVal} month(s)`,
+      };
+    }
+  }
+
+  // 6. Check overlapping bookings
   const overlap = await bookingModel.findOne({
     listing: listing._id,
-    bookingStatus: { $in: ["pending", "confirmed", "active"] },
-    $or: [
-      { startDate: { $lt: end }, endDate: { $gt: start } }
-    ]
+    bookingStatus: {
+      $in: ["pending", "confirmed", "active"],
+    },
+    startDate: { $lt: end },
+    endDate: { $gt: start },
   });
 
   if (overlap) {
-    return { available: false, message: "Space is already booked for the selected dates" };
+    return {
+      available: false,
+      message: "Space is already booked for the selected dates",
+    };
   }
 
-  return { available: true };
+  // 7. Listing is available
+  return {
+    available: true,
+    message: "Space is available for the selected dates",
+  };
 };
 
 export async function previewBooking(req, res) {
   try {
     const { listingId, startDate, endDate, durationMonths } = req.body;
 
+    // 1. Validate required fields
     if (!listingId || !startDate || !endDate) {
       return res.status(400).json({
         success: false,
-        message: "Listing ID, start date, and end date are required"
+        message: "Listing ID, start date, and end date are required",
       });
     }
 
+    // 2. Validate MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(listingId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid listing ID",
+      });
+    }
+
+    // 3. Find listing
     const listing = await listingModel.findById(listingId);
+
     if (!listing) {
       return res.status(404).json({
         success: false,
-        message: "Listing not found"
+        message: "Listing not found",
       });
     }
 
-    const { start, end, durationMonths: calculatedDuration } = parseDuration(startDate, endDate, durationMonths);
-    const check = await validateAvailability(listing, start, end, calculatedDuration);
+    // 4. Validate dates and duration
+    let parsedDuration;
+
+    try {
+      parsedDuration = parseDuration(
+        startDate,
+        endDate,
+        durationMonths
+      );
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const { start, end, durationMonths: calculatedDuration } =
+      parsedDuration;
+
+    // 5. Check listing availability
+    const check = await validateAvailability(
+      listing,
+      start,
+      end,
+      calculatedDuration
+    );
 
     if (!check.available) {
       return res.status(400).json({
         success: false,
-        message: check.message
+        message: `Message from available check: ${check.message}`,
       });
     }
 
-    const monthlyPrice = listing.price || 0;
-    const securityDeposit = listing.securityDeposit || 0;
+    // 6. Validate listing pricing
+    const monthlyPrice = Number(listing.price);
+    const securityDeposit = Number(listing.securityDeposit);
+
+    if (
+      !Number.isFinite(monthlyPrice) ||
+      !Number.isFinite(securityDeposit) ||
+      monthlyPrice < 0 ||
+      securityDeposit < 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid listing pricing information",
+      });
+    }
+
+    // 7. Calculate booking amount
     const rentTotal = monthlyPrice * calculatedDuration;
-    const platformFee = Math.round(rentTotal * 0.05);
+    const platformFee = rentTotal * 0.05;
     const totalAmount = rentTotal + securityDeposit + platformFee;
 
+    // 8. Return booking preview
     return res.status(200).json({
       success: true,
       available: true,
@@ -111,89 +231,161 @@ export async function previewBooking(req, res) {
         endDate: end.toISOString().split("T")[0],
         durationMonths: calculatedDuration,
         monthlyPrice,
+        rentTotal,
         securityDeposit,
         platformFee,
         totalAmount,
       },
     });
   } catch (error) {
-    return res.status(400).json({
+    console.error("Preview booking error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 }
 
 export async function createBooking(req, res) {
+  const session = await mongoose.startSession();
   try {
-    const {
-      listingId,
-      startDate,
-      endDate,
-      durationMonths
-    } = req.body;
-    const listing = await listingModel.findById(listingId);
-    if (!listing) {
-      return res.status(404).json({
-        success: false,
-        message: "Listing not found"
-       });
-    }
-    if (!listingId || !startDate || !endDate) {
-      return res.status(400).json(
-        {
-          success: false,
-          message: "Listing ID, start date, and end date are required"
-        }
-      );
-    }
-    const { start, end, durationMonths: calculatedDuration } = parseDuration(startDate, endDate, durationMonths);
-    const check = await validateAvailability(listing, start, end, calculatedDuration);
+    session.startTransaction();
 
-    if (!check.available) {
+    // 1. Validate required fields
+    if (!req.body.listingId || !req.body.startDate || !req.body.endDate) {
       return res.status(400).json({
         success: false,
-        message: check.message
+        message: "Listing ID, start date, and end date are required",
       });
     }
 
-    const monthlyPrice = listing.price || 0;
-    const securityDeposit = listing.securityDeposit || 0;
-    const rentTotal = monthlyPrice * calculatedDuration;
-    const platformFee = Math.round(rentTotal * 0.05);
-    const totalAmount = rentTotal + securityDeposit + platformFee;
-    const accessToken = req.cookies.accessToken;
+    if (!mongoose.Types.ObjectId.isValid(req.body.listingId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid listing ID",
+      });
+    }
 
-    const { id: userId } = jwt.verify(
-      accessToken,
-      config.JWT_SECRET
+    // 2. Find listing using session
+    const listing = await listingModel
+      .findById(req.body.listingId)
+      .session(session);
+
+    if (!listing) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found",
+      });
+    }
+
+    // 3. Prevent self-booking
+    if (listing.owner.toString() === req.user.id) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "You cannot book your own listing",
+      });
+    }
+
+    // 4. Validate dates and duration
+    let parsedDates;
+    try {
+      parsedDates = parseDuration(
+        req.body.startDate,
+        req.body.endDate,
+        req.body.durationMonths
+      );
+    } catch (error) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    const { start, end, durationMonths } = parsedDates;
+
+    // 5. Full availability validation (status, occupied, dates, duration, overlaps)
+    const availabilityCheck = await validateAvailability(
+      listing,
+      start,
+      end,
+      durationMonths
     );
 
-    const user = await userModel.findById(userId);
-    const booking = await bookingModel.create({
-      renter: userId,
-      listing: listing._id,
-      host: listing.owner,
-      startDate: start,
-      endDate: end,
-      monthlyPrice,
-      securityDeposit,
-      platformFee,
-      totalAmount,
-      bookingStatus: "pending",
-      paymentStatus: "pending",
-    });
+    if (!availabilityCheck.available) {
+      await session.abortTransaction();
+      return res.status(409).json({
+        success: false,
+        message: availabilityCheck.message,
+      });
+    }
+
+    // 6. Calculate price on backend
+    const monthlyPrice = Number(listing.price);
+    const securityDeposit = Number(listing.securityDeposit);
+
+    if (
+      !Number.isFinite(monthlyPrice) ||
+      !Number.isFinite(securityDeposit) ||
+      monthlyPrice < 0 ||
+      securityDeposit < 0
+    ) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid listing pricing information",
+      });
+    }
+
+    const rentTotal = monthlyPrice * durationMonths;
+    const platformFee = rentTotal * 0.05;
+    const totalAmount = rentTotal + securityDeposit + platformFee;
+
+    // 7. Create booking inside transaction
+    const [booking] = await bookingModel.create(
+      [{
+        renter: req.user.id,
+        listing: listing._id,
+        host: listing.owner,
+        startDate: start,
+        endDate: end,
+        durationMonths,
+        monthlyPrice,
+        securityDeposit,
+        platformFee,
+        totalAmount,
+        bookingStatus: "confirmed",
+        paymentStatus: "pending",
+      }],
+      { session }
+    );
+
+    // 8. Commit transaction
+    await session.commitTransaction();
 
     return res.status(201).json({
       success: true,
       message: "Booking created successfully",
-      booking
+      booking,
     });
+
   } catch (error) {
-    return res.status(400).json({
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+
+    console.error("Create booking error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message
+      message: "Internal server error",
     });
+
+  } finally {
+    await session.endSession();
   }
 }
 
@@ -203,21 +395,41 @@ export async function getMyBookings(req, res) {
     const { status } = req.query;
 
     const query = { renter: userId };
+
+    // Filter bookings by status
     if (status) {
-      const lower = status.toLowerCase();
-      if (lower === "upcoming") {
-        query.bookingStatus = { $in: ["pending", "confirmed"] };
-      } else if (lower === "active") {
-        query.bookingStatus = "active";
-      } else if (lower === "completed") {
-        query.bookingStatus = "completed";
-      } else if (lower === "cancelled") {
-        query.bookingStatus = "cancelled";
-      } else {
-        query.bookingStatus = status;
+      const lowerStatus = status.toLowerCase().trim();
+
+      switch (lowerStatus) {
+        case "upcoming":
+          query.bookingStatus = "confirmed";
+          break;
+
+        case "active":
+          query.bookingStatus = "active";
+          break;
+
+        case "completed":
+          query.bookingStatus = "completed";
+          break;
+
+        case "cancelled":
+          query.bookingStatus = "cancelled";
+          break;
+
+        case "expired":
+          query.bookingStatus = "expired";
+          break;
+
+        default:
+          return res.status(400).json({
+            success: false,
+            message: "Invalid booking status",
+          });
       }
     }
 
+    // Fetch renter bookings
     const bookings = await bookingModel
       .find(query)
       .populate("listing")
@@ -226,12 +438,15 @@ export async function getMyBookings(req, res) {
 
     return res.status(200).json({
       success: true,
+      count: bookings.length,
       bookings,
     });
   } catch (error) {
+    console.error("Get my bookings error:", error);
+
     return res.status(500).json({
       success: false,
-      message: error.message
+      message: "Internal server error",
     });
   }
 }
@@ -241,10 +456,214 @@ export async function getBookingById(req, res) {
     const { id } = req.params;
     const userId = req.user.id;
 
+    // 1. Validate booking ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking ID",
+      });
+    }
+
+    // 2. Find booking and populate details
     const booking = await bookingModel
       .findById(id)
       .populate("listing")
+      .populate("renter", "username email")
       .populate("host", "username email");
+
+    // 3. Check booking existence
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found",
+      });
+    }
+
+    // 4. Extract renter and host IDs safely
+    const renterId = booking.renter?._id?.toString();
+    const hostId = booking.host?._id?.toString();
+
+    // 5. Authorization check
+    if (renterId !== userId && hostId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized to view this booking",
+      });
+    }
+
+    // 6. Return booking
+    return res.status(200).json({
+      success: true,
+      booking,
+    });
+  } catch (error) {
+    console.error("Get booking by ID error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+}
+export async function cancelBooking(req, res) {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id.toString();
+
+    // 1. Validate booking ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking ID",
+      });
+    }
+
+    // 2. Find booking
+    const booking = await bookingModel.findById(id);
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found",
+      });
+    }
+
+    // 3. Extract renter and host IDs
+    const renterId = booking.renter?.toString();
+    const hostId = booking.host?.toString();
+
+    // 4. Authorization check
+    if (renterId !== userId && hostId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized to cancel this booking",
+      });
+    }
+
+    // 5. Validate booking status
+    if (booking.bookingStatus === "cancelled") {
+      return res.status(409).json({
+        success: false,
+        message: "Booking is already cancelled",
+      });
+    }
+
+    if (booking.bookingStatus === "completed") {
+      return res.status(409).json({
+        success: false,
+        message: "Completed bookings cannot be cancelled",
+      });
+    }
+
+    if (booking.bookingStatus === "expired") {
+      return res.status(409).json({
+        success: false,
+        message: "Expired bookings cannot be cancelled",
+      });
+    }
+
+    // 6. Cancel booking
+    booking.bookingStatus = "cancelled";
+
+    await booking.save();
+
+    // 7. Populate booking details
+    const populatedBooking = await bookingModel
+      .findById(booking._id)
+      .populate("listing")
+      .populate("renter", "username email")
+      .populate("host", "username email");
+
+    // 8. Return response
+    return res.status(200).json({
+      success: true,
+      message: "Booking cancelled successfully",
+      booking: populatedBooking,
+    });
+  } catch (error) {
+    console.error("Cancel booking error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+}
+
+export async function getHostBookings(req, res) {
+  try {
+    const hostId = req.user.id;
+    const { status } = req.query;
+
+    const query = { host: hostId };
+
+    if (status) {
+      const lowerStatus = status.toLowerCase().trim();
+
+      switch (lowerStatus) {
+        case "upcoming":
+          query.bookingStatus = "confirmed";
+          break;
+
+        case "active":
+          query.bookingStatus = "active";
+          break;
+
+        case "completed":
+          query.bookingStatus = "completed";
+          break;
+
+        case "cancelled":
+          query.bookingStatus = "cancelled";
+          break;
+
+        case "expired":
+          query.bookingStatus = "expired";
+          break;
+
+        default:
+          return res.status(400).json({
+            success: false,
+            message: "Invalid booking status",
+          });
+      }
+    }
+
+    const bookings = await bookingModel
+      .find(query)
+      .populate("listing")
+      .populate("renter", "username email")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: bookings.length,
+      bookings,
+    });
+  } catch (error) {
+    console.error("Get host bookings error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+}
+export async function completeBooking(req, res) {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Validate booking ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking ID"
+      });
+    }
+
+    // Find booking
+    const booking = await bookingModel.findById(id);
 
     if (!booking) {
       return res.status(404).json({
@@ -253,64 +672,116 @@ export async function getBookingById(req, res) {
       });
     }
 
-    const renterId = booking.renter._id ? booking.renter._id.toString() : booking.renter.toString();
-    const hostId = booking.host._id ? booking.host._id.toString() : booking.host.toString();
-
-    if (renterId !== userId && hostId !== userId) {
+    // Only the host can complete the booking
+    if (booking.host.toString() !== userId) {
       return res.status(403).json({
         success: false,
-        message: "Unauthorized to view this booking"
+        message: "Only the host can complete this booking"
+      });
+    }
+
+    // Booking must be active
+    if (booking.bookingStatus !== "active") {
+      return res.status(400).json({
+        success: false,
+        message: "Only active bookings can be completed"
+      });
+    }
+
+    // Rental period must have ended
+    if (new Date(booking.endDate) > new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "Rental period has not ended yet"
+      });
+    }
+
+    // Mark booking as completed
+    booking.bookingStatus = "completed";
+
+    await booking.save();
+
+    // Return updated booking
+    const completedBooking = await bookingModel
+      .findById(booking._id)
+      .populate("listing")
+      .populate("renter", "username email")
+      .populate("host", "username email");
+
+    return res.status(200).json({
+      success: true,
+      message: "Booking completed successfully",
+      booking: completedBooking
+    });
+
+  } catch (error) {
+    console.error("Complete Booking Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error"
+    });
+  }
+};
+
+export async function getHostBookingById(req, res) {
+  try {
+    const { bookingId } = req.params;
+    const userId = req.user.id;
+
+    // Check if booking ID is provided
+    if (!bookingId) {
+      return res.status(400).json({
+        success: false,
+        message: "Booking ID required"
+      });
+    }
+
+    // Validate MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(bookingId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking ID"
+      });
+    }
+
+    // Find booking and populate details
+    const booking = await bookingModel
+      .findById(bookingId)
+      .populate("listing")
+      .populate("renter", "username email")
+      .populate("host", "username email");
+
+    // Check booking existence
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found"
+      });
+    }
+
+    // Check host authorization
+    if (booking.host._id.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to access this booking"
       });
     }
 
     return res.status(200).json({
       success: true,
-      booking,
+      message: "Booking fetched successfully",
+      booking
     });
+
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 }
 
-export async function cancelBooking(req, res) {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
 
-    const booking = await bookingModel.findById(id);
-    if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking not found" });
-    }
 
-    const renterId = booking.renter._id ? booking.renter._id.toString() : booking.renter.toString();
-    const hostId = booking.host._id ? booking.host._id.toString() : booking.host.toString();
 
-    if (renterId !== userId && hostId !== userId) {
-      return res.status(403).json({ success: false, message: "Unauthorized to cancel this booking" });
-    }
-
-    if (booking.bookingStatus === "cancelled") {
-      return res.status(400).json({ success: false, message: "Booking is already cancelled" });
-    }
-
-    if (booking.bookingStatus === "completed") {
-      return res.status(400).json({ success: false, message: "Completed bookings cannot be cancelled" });
-    }
-
-    booking.bookingStatus = "cancelled";
-    await booking.save();
-
-    const populated = await bookingModel
-      .findById(booking._id)
-      .populate("listing")
-      .populate("host", "username email");
-
-    return res.status(200).json({
-      success: true,
-      message: "Booking cancelled successfully",
-      booking: populated,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-}
