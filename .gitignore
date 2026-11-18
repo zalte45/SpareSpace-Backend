@@ -1,8 +1,10 @@
+
 # Environment variables (Crucial!)
 .env
-.env.local
+.env.*
+!.env.example
 
-# Dependency folders (Never upload these, they are too large)
+# Dependency folders (Never upload these)
 node_modules/
 venv/
 .venv/
@@ -11,5 +13,30 @@ __pycache__/
 # Logs and system files
 npm-debug.log*
 .DS_Store
+Thumbs.db
+*.log
+
+# Build outputs
 dist/
 build/
+
+# Generated Prisma client (if generated inside src)
+src/generated/prisma/
+
+# Editor configurations
+.vscode/
+.windsurf/
+
+# AI coding tools
+.agents/
+.claude/
+
+# Postman local configuration
+.postman/
+
+# Windsurf editor configuration
+.windsurf/
+
+# VS Code configuration
+.vscode/
+.skills-lock.json

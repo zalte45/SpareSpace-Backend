@@ -1,6 +1,8 @@
 import bookingModel from "../model/booking.model.js";
 import listingModel from "../model/listing.model.js";
 import mongoose from "mongoose";
+import { prisma } from "../config/postgres.js";
+
 
 const parseDuration = (startDateStr, endDateStr, reqDuration) => {
   const start = new Date(startDateStr);
@@ -113,13 +115,19 @@ const validateAvailability = async (listing, start, end, durationMonths) => {
   }
 
   // 6. Check overlapping bookings
-  const overlap = await bookingModel.findOne({
-    listing: listing._id,
-    bookingStatus: {
-      $in: ["pending", "confirmed", "active"],
+  const overlap = await prisma.booking.findFirst({
+    where: {
+      listingId: listing._id.toString(),
+      bookingStatus: {
+        in: ["pending", "confirmed", "active"],
+      },
+      startDate: {
+        lt: end,
+      },
+      endDate: {
+        gt: start,
+      },
     },
-    startDate: { $lt: end },
-    endDate: { $gt: start },
   });
 
   if (overlap) {
@@ -248,10 +256,7 @@ export async function previewBooking(req, res) {
 }
 
 export async function createBooking(req, res) {
-  const session = await mongoose.startSession();
   try {
-    session.startTransaction();
-
     // 1. Validate required fields
     if (!req.body.listingId || !req.body.startDate || !req.body.endDate) {
       return res.status(400).json({
@@ -260,6 +265,7 @@ export async function createBooking(req, res) {
       });
     }
 
+    // 2. Validate MongoDB listing ID
     if (!mongoose.Types.ObjectId.isValid(req.body.listingId)) {
       return res.status(400).json({
         success: false,
@@ -267,30 +273,27 @@ export async function createBooking(req, res) {
       });
     }
 
-    // 2. Find listing using session
-    const listing = await listingModel
-      .findById(req.body.listingId)
-      .session(session);
+    // 3. Fetch listing from MongoDB
+    const listing = await listingModel.findById(req.body.listingId);
 
     if (!listing) {
-      await session.abortTransaction();
       return res.status(404).json({
         success: false,
         message: "Listing not found",
       });
     }
 
-    // 3. Prevent self-booking
+    // 4. Prevent self-booking
     if (listing.owner.toString() === req.user.id) {
-      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: "You cannot book your own listing",
       });
     }
 
-    // 4. Validate dates and duration
+    // 5. Validate dates and duration
     let parsedDates;
+
     try {
       parsedDates = parseDuration(
         req.body.startDate,
@@ -298,7 +301,6 @@ export async function createBooking(req, res) {
         req.body.durationMonths
       );
     } catch (error) {
-      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: error.message,
@@ -307,7 +309,9 @@ export async function createBooking(req, res) {
 
     const { start, end, durationMonths } = parsedDates;
 
-    // 5. Full availability validation (status, occupied, dates, duration, overlaps)
+    // 6. Validate listing availability
+    // This should validate listing status, available dates,
+    // and duration constraints. SQL overlap checking happens below.
     const availabilityCheck = await validateAvailability(
       listing,
       start,
@@ -316,14 +320,13 @@ export async function createBooking(req, res) {
     );
 
     if (!availabilityCheck.available) {
-      await session.abortTransaction();
       return res.status(409).json({
         success: false,
         message: availabilityCheck.message,
       });
     }
 
-    // 6. Calculate price on backend
+    // 7. Calculate pricing
     const monthlyPrice = Number(listing.price);
     const securityDeposit = Number(listing.securityDeposit);
 
@@ -333,7 +336,6 @@ export async function createBooking(req, res) {
       monthlyPrice < 0 ||
       securityDeposit < 0
     ) {
-      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: "Invalid listing pricing information",
@@ -344,50 +346,93 @@ export async function createBooking(req, res) {
     const platformFee = rentTotal * 0.05;
     const totalAmount = rentTotal + securityDeposit + platformFee;
 
-    // 7. Create booking inside transaction
-    const [booking] = await bookingModel.create(
-      [{
-        renter: req.user.id,
-        listing: listing._id,
-        host: listing.owner,
-        startDate: start,
-        endDate: end,
-        durationMonths,
-        monthlyPrice,
-        securityDeposit,
-        platformFee,
-        totalAmount,
-        bookingStatus: "confirmed",
-        paymentStatus: "pending",
-      }],
-      { session }
-    );
+    const listingId = listing._id.toString();
 
-    // 8. Commit transaction
-    await session.commitTransaction();
+    // 8. PostgreSQL transaction with concurrency protection
+    const booking = await prisma.$transaction(async (tx) => {
+      // Acquire transaction-level advisory lock for this listing.
+      // Concurrent requests for the same listing must wait.
+      await tx.$queryRaw`
+  WITH advisory_lock AS (
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(${listingId}, 0)
+    )
+  )
+  SELECT 1::int AS locked
+  FROM advisory_lock;
+`;
 
+      // Recheck overlapping bookings inside the locked transaction
+      const overlap = await tx.Booking.findFirst({
+        where: {
+          listingId,
+          bookingStatus: {
+            in: ["pending", "confirmed", "active"],
+          },
+          startDate: {
+            lt: end,
+          },
+          endDate: {
+            gt: start,
+          },
+        },
+      });
+
+      // Return null if another booking already occupies these dates
+      if (overlap) {
+        return null;
+      }
+
+      // Insert the booking into PostgreSQL
+      const createdBooking = await tx.booking.create({
+        data: {
+          renterId: req.user.id,
+          listingId,
+          hostId: listing.owner.toString(),
+
+          startDate: start,
+          endDate: end,
+
+          durationMonths,
+
+          monthlyPrice,
+          securityDeposit,
+          platformFee,
+          totalAmount,
+
+          bookingStatus: "confirmed",
+          paymentStatus: "pending",
+        },
+      });
+
+      // Return the created PostgreSQL record
+      return createdBooking;
+    });
+
+    // 9. Handle overlapping booking
+    if (!booking) {
+      return res.status(409).json({
+        success: false,
+        message: "This listing is already booked for the selected dates",
+      });
+    }
+
+    // 10. Return created booking
     return res.status(201).json({
       success: true,
       message: "Booking created successfully",
       booking,
     });
-
   } catch (error) {
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
-
     console.error("Create booking error:", error);
 
     return res.status(500).json({
       success: false,
       message: "Internal server error",
     });
-
-  } finally {
-    await session.endSession();
   }
 }
+
 
 export async function getMyBookings(req, res) {
   try {
