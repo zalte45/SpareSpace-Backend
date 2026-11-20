@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "test": "node --env-file=.env --test tests/authSecurity.test.mjs",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "build": "prisma generate"
   },
   "keywords": [],
   "author": "",

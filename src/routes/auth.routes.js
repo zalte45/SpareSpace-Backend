@@ -7,6 +7,10 @@ const authRouter = Router();
 // Authentication routes
 authRouter.post("/register", authController.register);
 authRouter.get("/getMe", authController.getMe);
+authRouter.get("/healthz",(req, res) => {
+  res.status(200).json({ status: 'ok' });
+})
+
 authRouter.post("/login", authController.login);
 authRouter.get("/logout", authController.Logout);
 authRouter.post("/verifyOtp", authController.verifyOtp);
