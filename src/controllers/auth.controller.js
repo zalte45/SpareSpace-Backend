@@ -76,51 +76,45 @@ export async function register(req, res) {
 
 
 }
-
 export async function getMe(req, res) {
     try {
-        const accessToken = req.cookies.accessToken
-        const refreshToken=req.cookies.refreshToken
+        const accessToken = req.cookies.accessToken;
+        const refreshToken = req.cookies.refreshToken;
         if (!accessToken || !refreshToken) {
             return res.status(401).json({
                 Message: "Tokens not found"
-            })
+            });
         }
-        const decoded = jwt.verify(accessToken, config.JWT_SECRET)
+        const decoded = jwt.verify(accessToken, config.JWT_SECRET);
         const user = await userModel.findById(decoded.id).select("-password");
-        const refreshTokenHashed=crypto.createHash("sha256").update(refreshToken).digest("hex")
-        
+        if (!user) {
+            return res.status(404).json({
+                Message: "User not found"
+            });
+        }
+        const refreshTokenHashed = crypto.createHash("sha256").update(refreshToken).digest("hex");
+
         const session = await sessionModel.findOne({
-            refreshTokenHashed:refreshTokenHashed
-        })
-        if (session.revoked===false) {
-            return res.status(200).json({
-                Message: "User found successfully ! and logged in",
-                user,
-                session
-            })
+            refreshTokenHashed: refreshTokenHashed
+        });
+        if (!session || session.revoked) {
+            return res.status(401).json({
+                Message: "Session revoked or expired. Please login again."
+            });
         }
-        if (session.revoked===true) {
-            return res.status(200).json({
-                Message: "User found successfully ! but logout",
-                user,
-                session
-            })
-        }
-        res.status(200).json({
-                Message: "User found successfully ! but logout",
-                user,
-                session
-            })
+        return res.status(200).json({
+            Message: "User found successfully ! and logged in",
+            user,
+            session
+        });
     } catch (error) {
-        console.error(error)
-        res.status(401).json({
+        console.error(error);
+        return res.status(401).json({
             Message: "Invalid or expired token !",
-            error:error
-        })
+            error: error.message
+        });
     }
 }
-
 export async function login(req, res) {
     console.log("Login api run !")
     const { email, password } = req.body;
@@ -159,16 +153,19 @@ export async function login(req, res) {
         }, config.JWT_SECRET, {
             expiresIn: "15m"
         })
+        const isProduction = process.env.NODE_ENV === "production";
         res.cookie("refreshToken", refreshToken, {
             httpOnly: true,
-            secure: true,
+            secure: isProduction,
             sameSite: "strict",
+            path: "/",
             maxAge: 7 * 24 * 60 * 60 * 1000 //7days
-        })
+        });
         res.cookie("accessToken", accessToken, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
+            secure: isProduction,
             sameSite: "strict",
+            path: "/",
             maxAge: 15 * 60 * 1000, // 15 minutes
         });
 
@@ -179,7 +176,7 @@ export async function login(req, res) {
                 email: user.email,
                 id: user._id,
                 verified: user.verified,
-                Role:user.role
+                Role: user.role
             },
         })
 
@@ -190,7 +187,6 @@ export async function login(req, res) {
         })
     }
 }
-
 export async function tokenRotate(req, res) {
     const { refreshToken } = req.cookies;
     if (!refreshToken) {
@@ -208,61 +204,84 @@ export async function tokenRotate(req, res) {
             Message: "invalid refresh token !"
         })
     }
-    const decoded = jwt.verify(refreshToken, config.JWT_SECRET);
+    const isProduction = process.env.NODE_ENV === "production";
     const accessToken = jwt.sign({
-        id: decoded._id
+        id: session.user,
+        sessionId: session._id
     }, config.JWT_SECRET, {
         expiresIn: "15m"
-    })
+    });
     const newRefreshToken = jwt.sign({
-        id: decoded._id
+        id: session.user
     }, config.JWT_SECRET, {
         expiresIn: "7d"
-    })
+    });
 
     const newRefreshTokenHashed = crypto.createHash("sha256").update(newRefreshToken).digest("hex");
     session.refreshTokenHashed = newRefreshTokenHashed;
-    await session.save()
+    await session.save();
+
+    res.cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: "strict",
+        path: "/",
+        maxAge: 15 * 60 * 1000, // 15 minutes
+    });
 
     res.cookie("refreshToken", newRefreshToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure: isProduction,
         sameSite: "strict",
+        path: "/",
         maxAge: 7 * 24 * 60 * 60 * 1000 //7days
-    })
+    });
     res.status(200).json({
-        Message: "Access token refresh successFully !",
-        accessToken
-    })
+        Message: "Both token rotated successFully !",
+    });
 }
-
 export async function Logout(req, res) {
     try {
-        const refreshToken = req.cookies.refreshToken;
-        if (!refreshToken) {
-            return res.status(400).json({
-                Message: "Token not found !"
-            })
-        }
-        const refreshTokenHashed = crypto.createHash("sha256").update(refreshToken).digest("hex");
-        const session = await sessionModel.findOne({
-            refreshTokenHashed,
-            revoked: false
-        })
+        const refreshToken = req.cookies?.refreshToken;
+        const accessToken = req.cookies?.accessToken;
 
-        if (!session) {
-            return res.status(200).json({
-                Message: "Invalid refresh token !!"
-            })
+        // Revoke database session if refreshToken is present
+        if (refreshToken) {
+            const refreshTokenHashed = crypto.createHash("sha256").update(refreshToken).digest("hex");
+            const session = await sessionModel.findOne({
+                refreshTokenHashed,
+                revoked: false
+            });
+            if (session) {
+                session.revoked = true;
+                await session.save();
+            }
+        } else if (accessToken) {
+            // Fallback: If refreshToken was missing/expired, revoke by sessionId from accessToken
+            try {
+                const decoded = jwt.verify(accessToken, config.JWT_SECRET);
+                if (decoded?.sessionId) {
+                    await sessionModel.findByIdAndUpdate(decoded.sessionId, { revoked: true });
+                }
+            } catch {
+                // Ignore expired accessToken, continue clearing cookies
+            }
         }
-        session.revoked = true;
-        await session.save()
 
-        res.clearCookie("refreshToken");
+        const isProduction = process.env.NODE_ENV === "production";
+        const clearCookieOptions = {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: "strict",
+            path: "/"
+        };
+
+        res.clearCookie("accessToken", clearCookieOptions);
+        res.clearCookie("refreshToken", clearCookieOptions);
 
         return res.status(200).json({
             Message: "Logout SuccessFull"
-        })
+        });
     } catch (error) {
         console.error(error);
         return res.status(500).json({
@@ -270,7 +289,6 @@ export async function Logout(req, res) {
         });
     }
 }
-
 export async function verifyOtp(req, res) {
     try {
         const { otp, verifyToken } = req.body;
@@ -338,7 +356,6 @@ export async function verifyOtp(req, res) {
         });
     }
 }
-
 export async function forgotOtp(req, res) {
     const email = req.body.email;
     if (!email) {
@@ -431,5 +448,3 @@ export async function newPassword(req, res) {
         Message: "Password rest successFull !"
     })
 }
-
-

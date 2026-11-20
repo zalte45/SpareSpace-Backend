@@ -5,12 +5,12 @@ import {protect} from '../middleware/auth.middleware.js'
 
 const listingRouter = Router()
 
-listingRouter.post("/listing", upload.array("images", 10),spaceListing.Listing);
-listingRouter.get("/my-spaces",spaceListing.getMySpaces);
-listingRouter.get("/listing",spaceListing.getAllSpaces);
-listingRouter.get("/listing/:id",spaceListing.getSpaceById);
-listingRouter.delete("/listing/:id",spaceListing.deleteListing);
-listingRouter.patch("/listing/:id", protect,upload.array("images", 10), spaceListing.updateListing);
+listingRouter.post("/listing", protect, upload.array("images", 10), spaceListing.Listing);
+listingRouter.get("/my-spaces", protect, spaceListing.getMySpaces);
+listingRouter.get("/listing", spaceListing.getAllSpaces);
+listingRouter.get("/listing/:id", spaceListing.getSpaceById);
+listingRouter.delete("/listing/:id", protect, spaceListing.deleteListing);
+listingRouter.patch("/listing/:id", protect, upload.array("images", 10), spaceListing.updateListing);
 
 
 

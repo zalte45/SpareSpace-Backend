@@ -1,4 +1,5 @@
 import bookingModel from "../model/booking.model.js";
+import userModel from "../model/user.model.js"
 import listingModel from "../model/listing.model.js";
 import mongoose from "mongoose";
 import { prisma } from "../config/postgres.js";
@@ -143,7 +144,6 @@ const validateAvailability = async (listing, start, end, durationMonths) => {
     message: "Space is available for the selected dates",
   };
 };
-
 export async function previewBooking(req, res) {
   try {
     const { listingId, startDate, endDate, durationMonths } = req.body;
@@ -254,7 +254,6 @@ export async function previewBooking(req, res) {
     });
   }
 }
-
 export async function createBooking(req, res) {
   try {
     // 1. Validate required fields
@@ -432,60 +431,87 @@ export async function createBooking(req, res) {
     });
   }
 }
-
-
 export async function getMyBookings(req, res) {
   try {
     const userId = req.user.id;
     const { status } = req.query;
 
-    const query = { renter: userId };
+    // 1. Build PostgreSQL query
+    const where = {
+      renterId: userId,
+    };
 
-    // Filter bookings by status
+    // 2. Filter bookings by status
     if (status) {
       const lowerStatus = status.toLowerCase().trim();
 
-      switch (lowerStatus) {
-        case "upcoming":
-          query.bookingStatus = "confirmed";
-          break;
+      const statusMap = {
+        upcoming: "confirmed",
+        active: "active",
+        completed: "completed",
+        cancelled: "cancelled",
+        expired: "expired",
+      };
 
-        case "active":
-          query.bookingStatus = "active";
-          break;
-
-        case "completed":
-          query.bookingStatus = "completed";
-          break;
-
-        case "cancelled":
-          query.bookingStatus = "cancelled";
-          break;
-
-        case "expired":
-          query.bookingStatus = "expired";
-          break;
-
-        default:
-          return res.status(400).json({
-            success: false,
-            message: "Invalid booking status",
-          });
+      if (!statusMap[lowerStatus]) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid booking status",
+        });
       }
+
+      where.bookingStatus = statusMap[lowerStatus];
     }
 
-    // Fetch renter bookings
-    const bookings = await bookingModel
-      .find(query)
-      .populate("listing")
-      .populate("host", "username email")
-      .sort({ createdAt: -1 });
+    // 3. Fetch bookings from PostgreSQL
+    const bookings = await prisma.booking.findMany({
+      where,
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
 
+    // 4. Extract unique MongoDB IDs
+    const hostIds = [...new Set(bookings.map(b => b.hostId))];
+    const listingIds = [...new Set(bookings.map(b => b.listingId))];
+
+    // 5. Fetch host and listing data from MongoDB
+    const [hosts, listings] = await Promise.all([
+      userModel.find({
+        _id: { $in: hostIds },
+      })
+        .select("username email")
+        .lean(),
+
+      listingModel.find({
+        _id: { $in: listingIds },
+      })
+        .lean(),
+    ]);
+
+    // 6. Create lookup maps
+    const hostMap = new Map(
+      hosts.map(host => [host._id.toString(), host])
+    );
+
+    const listingMap = new Map(
+      listings.map(listing => [listing._id.toString(), listing])
+    );
+
+    // 7. Combine PostgreSQL and MongoDB data
+    const formattedBookings = bookings.map(booking => ({
+      ...booking,
+      host: hostMap.get(booking.hostId) || null,
+      listing: listingMap.get(booking.listingId) || null,
+    }));
+
+    // 8. Return response
     return res.status(200).json({
       success: true,
-      count: bookings.length,
-      bookings,
+      count: formattedBookings.length,
+      bookings: formattedBookings,
     });
+
   } catch (error) {
     console.error("Get my bookings error:", error);
 
@@ -495,27 +521,26 @@ export async function getMyBookings(req, res) {
     });
   }
 }
-
 export async function getBookingById(req, res) {
   try {
     const { id } = req.params;
     const userId = req.user.id;
+    const bookingId = Number(id);
 
     // 1. Validate booking ID
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
       return res.status(400).json({
         success: false,
         message: "Invalid booking ID",
       });
     }
 
-    // 2. Find booking and populate details
-    const booking = await bookingModel
-      .findById(id)
-      .populate("listing")
-      .populate("renter", "username email")
-      .populate("host", "username email");
-
+    // 2. Find booking and host ,renter details
+    const booking = await prisma.booking.findUnique({
+      where: {
+        id: bookingId,
+      },
+    });
     // 3. Check booking existence
     if (!booking) {
       return res.status(404).json({
@@ -523,24 +548,44 @@ export async function getBookingById(req, res) {
         message: "Booking not found",
       });
     }
+    const [renter, host, listing] = await Promise.all([
+      userModel.findById(booking.renterId).select("username email"),
+      userModel.findById(booking.hostId).select("username email"),
+      listingModel.findById(booking.listingId),
+    ]);
+    booking.host = host;
+    booking.renter = renter;
+    booking.listing = listing;
 
-    // 4. Extract renter and host IDs safely
-    const renterId = booking.renter?._id?.toString();
-    const hostId = booking.host?._id?.toString();
-
-    // 5. Authorization check
-    if (renterId !== userId && hostId !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: "Unauthorized to view this booking",
-      });
-    }
-
-    // 6. Return booking
     return res.status(200).json({
       success: true,
       booking,
+      // renter,
+      // host,
+      // listing,
     });
+    // const booking = await bookingModel
+    //   .findById(id)
+    //   .populate("listing")
+    //   .populate("renter", "username email")
+    //   .populate("host", "username email");
+
+
+
+
+    // // 5. Authorization check
+    // if (renterId !== userId && hostId !== userId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: "Unauthorized to view this booking",
+    //   });
+    // }
+
+    // // 6. Return booking
+    // return res.status(200).json({
+    //   success: true,
+    //   booking,
+    // });
   } catch (error) {
     console.error("Get booking by ID error:", error);
 
@@ -634,7 +679,6 @@ export async function cancelBooking(req, res) {
     });
   }
 }
-
 export async function getHostBookings(req, res) {
   try {
     const hostId = req.user.id;
@@ -768,7 +812,6 @@ export async function completeBooking(req, res) {
     });
   }
 };
-
 export async function getHostBookingById(req, res) {
   try {
     const { bookingId } = req.params;
@@ -826,6 +869,15 @@ export async function getHostBookingById(req, res) {
     });
   }
 }
+
+
+
+
+
+
+
+
+
 
 
 
