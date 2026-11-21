@@ -407,7 +407,7 @@ export async function getMySpaces(req, res) {
 
         return res.status(500).json({
             success: false,
-            message: error.message,
+            message: `error from catch: ${error.message}`,
         });
     }
 }
