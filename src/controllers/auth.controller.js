@@ -171,6 +171,7 @@ export async function login(req, res) {
 
         res.status(200).json({
             Message: "Logged in successfully",
+            accessToken,
             user: {
                 username: user.username,
                 email: user.email,
